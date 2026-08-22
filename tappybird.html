@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Flappy Bird</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #1a1a2e;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        canvas {
+            border: 3px solid #0f3460;
+            border-radius: 8px;
+            background-color: #70c5ce;
+            box-shadow: 0 15px 30px rgba(0,0,0,0.5);
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="birdCanvas" width="320" height="480"></canvas>
+
+<script>
+const canvas = document.getElementById("birdCanvas");
+const ctx = canvas.getContext("2d");
+
+let frames = 0;
+const DEGREE = Math.PI / 180;
+
+// Game States
+const state = {
+    current: 0,
+    menu: 0,
+    getReady: 1,
+    game: 2,
+    over: 3
+};
+
+// Sound Settings & Web Audio API Engine
+let soundEnabled = true;
+let audioCtx = null;
+let bgmInterval = null;
+
+function initAudio() {
+    if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume();
+    }
+}
+
+// Retro Sound Synthesizers
+function playFlapSound() {
+    if (!soundEnabled || !audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(400, audioCtx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(800, audioCtx.currentTime + 0.1);
+
+    gain.gain.setValueAtTime(0.2, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.1);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.1);
+}
+
+function playScoreSound() {
+    if (!soundEnabled || !audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.type = "square";
+    osc.frequency.setValueAtTime(523.25, audioCtx.currentTime); // C5
+    osc.frequency.setValueAtTime(659.25, audioCtx.currentTime + 0.08); // E5
+
+    gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.2);
+}
+
+function playHitSound() {
+    if (!soundEnabled || !audioCtx) return;
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(150, audioCtx.currentTime);
+    osc.frequency.linearRampToValueAtTime(40, audioCtx.currentTime + 0.2);
+
+    gain.gain.setValueAtTime(0.3, audioCtx.currentTime);
+    gain.gain.linearRampToValueAtTime(0.01, audioCtx.currentTime + 0.2);
+
+    osc.start();
+    osc.stop(audioCtx.currentTime + 0.2);
+}
+
+// Background Music Synthesizer
+const bgmNotes = [261.63, 329.63, 392.00, 523.25, 392.00, 329.63];
+let bgmStep = 0;
+
+function startBGM() {
+    if (bgmInterval || !soundEnabled) return;
+    bgmInterval = setInterval(() => {
+        if (state.current !== state.game && state.current !== state.getReady) return;
+        if (!soundEnabled || !audioCtx) return;
+
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+
+        osc.type = "triangle";
+        osc.frequency.setValueAtTime(bgmNotes[bgmStep], audioCtx.currentTime);
+
+        gain.gain.setValueAtTime(0.04, audioCtx.currentTime);
+        gain.gain.linearRampToValueAtTime(0.001, audioCtx.currentTime + 0.2);
+
+        osc.start();
+        osc.stop(audioCtx.currentTime + 0.2);
+
+        bgmStep = (bgmStep + 1) % bgmNotes.length;
+    }, 250);
+}
+
+function stopBGM() {
+    if (bgmInterval) {
+        clearInterval(bgmInterval);
+        bgmInterval = null;
+    }
+}
+
+// UI Buttons for Menu
+const toggleSoundBtn = { x: 80, y: 260, w: 160, h: 45 };
+const startBtn = { x: 80, y: 320, w: 160, h: 45 };
+
+// Controls & Inputs
+window.addEventListener("keydown", function(evt) {
+    if (evt.code === "Space") {
+        evt.preventDefault();
+        handleInput();
+    }
+});
+
+canvas.addEventListener("click", function(evt) {
+    const rect = canvas.getBoundingClientRect();
+    const clickX = evt.clientX - rect.left;
+    const clickY = evt.clientY - rect.top;
+
+    if (state.current === state.menu) {
+        // Toggle Sound Button Click
+        if (clickX >= toggleSoundBtn.x && clickX <= toggleSoundBtn.x + toggleSoundBtn.w &&
+            clickY >= toggleSoundBtn.y && clickY <= toggleSoundBtn.y + toggleSoundBtn.h) {
+            soundEnabled = !soundEnabled;
+            return;
+        }
+        // Start Game Button Click
+        if (clickX >= startBtn.x && clickX <= startBtn.x + startBtn.w &&
+            clickY >= startBtn.y && clickY <= startBtn.y + startBtn.h) {
+            initAudio();
+            if (soundEnabled) startBGM();
+            state.current = state.getReady;
+            return;
+        }
+    } else {
+        handleInput();
+    }
+});
+
+function handleInput() {
+    initAudio();
+    switch (state.current) {
+        case state.menu:
+            if (soundEnabled) startBGM();
+            state.current = state.getReady;
+            break;
+        case state.getReady:
+            state.current = state.game;
+            bird.flap();
+            break;
+        case state.game:
+            bird.flap();
+            break;
+        case state.over:
+            pipes.reset();
+            bird.speedReset();
+            score.reset();
+            state.current = state.getReady;
+            if (soundEnabled) startBGM();
+            break;
+    }
+}
+
+const bird = {
+    x: 50,
+    y: 150,
+    radius: 12,
+    gravity: 0.25,
+    jump: 4.6,
+    speed: 0,
+    rotation: 0,
+    
+    draw: function() {
+        ctx.save();
+        ctx.translate(this.x, this.y);
+        ctx.rotate(this.rotation);
+        
+        ctx.fillStyle = "#FFD700";
+        ctx.beginPath();
+        ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = "#000";
+        ctx.stroke();
+        
+        ctx.fillStyle = "#FFF";
+        ctx.beginPath();
+        ctx.arc(4, -4, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = "#000";
+        ctx.beginPath();
+        ctx.arc(6, -4, 1.5, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.fillStyle = "#FF4500";
+        ctx.beginPath();
+        ctx.fillRect(6, 0, 8, 5);
+        ctx.strokeRect(6, 0, 8, 5);
+        
+        ctx.restore();
+    },
+    
+    flap: function() {
+        this.speed = -this.jump;
+        playFlapSound();
+    },
+    
+    update: function() {
+        if (state.current === state.getReady || state.current === state.menu) {
+            this.y = 150;
+            this.rotation = 0;
+        } else {
+            this.speed += this.gravity;
+            this.y += this.speed;
+            
+            if (this.y + this.radius >= canvas.height - 50) {
+                this.y = canvas.height - 50 - this.radius;
+                if (state.current === state.game) {
+                    playHitSound();
+                    stopBGM();
+                    state.current = state.over;
+                }
+            }
+
+            if (this.speed >= this.jump) {
+                this.rotation = 70 * DEGREE;
+            } else {
+                this.rotation = -25 * DEGREE;
+            }
+        }
+    },
+    
+    speedReset: function() {
+        this.speed = 0;
+    }
+};
+
+const pipes = {
+    position: [],
+    w: 52,
+    gap: 110,
+    dx: 2,
+    
+    draw: function() {
+        for (let i = 0; i < this.position.length; i++) {
+            let p = this.position[i];
+            let topYPos = p.y;
+            let bottomYPos = p.y + this.gap;
+            
+            ctx.fillStyle = "#73BF2E";
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 2;
+
+            ctx.fillRect(p.x, 0, this.w, topYPos);
+            ctx.strokeRect(p.x, 0, this.w, topYPos);
+            ctx.fillRect(p.x - 3, topYPos - 20, this.w + 6, 20);
+            ctx.strokeRect(p.x - 3, topYPos - 20, this.w + 6, 20);
+            
+            ctx.fillRect(p.x, bottomYPos, this.w, canvas.height - bottomYPos - 50);
+            ctx.strokeRect(p.x, bottomYPos, this.w, canvas.height - bottomYPos - 50);
+            ctx.fillRect(p.x - 3, bottomYPos, this.w + 6, 20);
+            ctx.strokeRect(p.x - 3, bottomYPos, this.w + 6, 20);
+        }
+    },
+    
+    update: function() {
+        if (state.current !== state.game) return;
+        
+        if (frames % 100 === 0) {
+            const randomY = Math.floor(Math.random() * 200) + 60;
+            this.position.push({
+                x: canvas.width,
+                y: randomY
+            });
+        }
+        
+        for (let i = 0; i < this.position.length; i++) {
+            let p = this.position[i];
+            let bottomPipeY = p.y + this.gap;
+            
+            if (bird.x + bird.radius > p.x && bird.x - bird.radius < p.x + this.w) {
+                if (bird.y - bird.radius < p.y || bird.y + bird.radius > bottomPipeY) {
+                    playHitSound();
+                    stopBGM();
+                    state.current = state.over;
+                }
+            }
+            
+            p.x -= this.dx;
+            
+            if (p.x + this.w <= 0) {
+                this.position.shift();
+                score.value += 1;
+                playScoreSound();
+                
+                if (score.value > score.best) {
+                    if (!score.newRecord) {
+                        score.newRecord = true;
+                        score.popupTimer = 120;
+                    }
+                    score.best = score.value;
+                    localStorage.setItem("flappy_high_score", score.best);
+                }
+            }
+        }
+    },
+    
+    reset: function() {
+        this.position = [];
+    }
+};
+
+const fg = {
+    draw: function() {
+        ctx.fillStyle = "#DED895";
+        ctx.fillRect(0, canvas.height - 50, canvas.width, 50);
+        ctx.fillStyle = "#73BF2E";
+        ctx.fillRect(0, canvas.height - 50, canvas.width, 12);
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 2;
+        ctx.strokeRect(0, canvas.height - 50, canvas.width, 50);
+    }
+};
+
+const score = {
+    best: parseInt(localStorage.getItem("flappy_high_score")) || 0,
+    value: 0,
+    newRecord: false,
+    popupTimer: 0,
+    
+    draw: function() {
+        ctx.fillStyle = "#FFF";
+        ctx.strokeStyle = "#000";
+        ctx.lineWidth = 2;
+        
+        if (state.current === state.menu) {
+            // Main Menu Display
+            ctx.font = "bold 32px Arial";
+            ctx.textAlign = "center";
+            ctx.fillText("FLAPPY BIRD", canvas.width / 2, 140);
+            ctx.strokeText("FLAPPY BIRD", canvas.width / 2, 140);
+
+            // Toggle Sound Button
+            ctx.fillStyle = soundEnabled ? "#4CAF50" : "#E53935";
+            ctx.fillRect(toggleSoundBtn.x, toggleSoundBtn.y, toggleSoundBtn.w, toggleSoundBtn.h);
+            ctx.strokeRect(toggleSoundBtn.x, toggleSoundBtn.y, toggleSoundBtn.w, toggleSoundBtn.h);
+            
+            ctx.fillStyle = "#FFF";
+            ctx.font = "bold 16px Arial";
+            ctx.fillText(soundEnabled ? "SOUND: ON 🔊" : "SOUND: OFF 🔇", canvas.width / 2, toggleSoundBtn.y + 28);
+
+            // Play Button
+            ctx.fillStyle = "#FF9800";
+            ctx.fillRect(startBtn.x, startBtn.y, startBtn.w, startBtn.h);
+            ctx.strokeRect(startBtn.x, startBtn.y, startBtn.w, startBtn.h);
+            
+            ctx.fillStyle = "#FFF";
+            ctx.font = "bold 18px Arial";
+            ctx.fillText("PLAY GAME", canvas.width / 2, startBtn.y + 28);
+            return;
+        }
+
+        // Draw HUD High Score
+        ctx.font = "14px Arial";
+        ctx.textAlign = "left";
+        ctx.fillText(`BEST: ${this.best}`, 10, 25);
+        ctx.strokeText(`BEST: ${this.best}`, 10, 25);
+
+        // High Score Broken Notification
+        if (this.popupTimer > 0) {
+            this.popupTimer--;
+            ctx.save();
+            ctx.fillStyle = "#FFD700";
+            ctx.font = "bold 13px Arial";
+            ctx.textAlign = "right";
+            ctx.fillText("NEW HIGH SCORE! ★", canvas.width - 10, 25);
+            ctx.strokeText("NEW HIGH SCORE! ★", canvas.width - 10, 25);
+            ctx.restore();
+        }
+
+        ctx.textAlign = "center";
+        if (state.current === state.game) {
+            ctx.font = "35px Arial";
+            ctx.fillText(this.value, canvas.width / 2, 50);
+            ctx.strokeText(this.value, canvas.width / 2, 50);
+        } else if (state.current === state.over) {
+            ctx.font = "bold 28px Arial";
+            ctx.fillText("GAME OVER", canvas.width / 2, 180);
+            ctx.strokeText("GAME OVER", canvas.width / 2, 180);
+            
+            ctx.font = "20px Arial";
+            ctx.fillText(`Score: ${this.value}`, canvas.width / 2, 220);
+            ctx.strokeText(`Score: ${this.value}`, canvas.width / 2, 220);
+            
+            ctx.fillText(`Best: ${this.best}`, canvas.width / 2, 250);
+            ctx.strokeText(`Best: ${this.best}`, canvas.width / 2, 250);
+            
+            ctx.font = "16px Arial";
+            ctx.fillText("Press Space or Click to Restart", canvas.width / 2, 310);
+        } else if (state.current === state.getReady) {
+            ctx.font = "20px Arial";
+            ctx.fillText("Press Space or Click to Play", canvas.width / 2, 200);
+            ctx.strokeText("Press Space or Click to Play", canvas.width / 2, 200);
+        }
+    },
+    
+    reset: function() {
+        this.value = 0;
+        this.newRecord = false;
+        this.popupTimer = 0;
+    }
+};
+
+function draw() {
+    ctx.fillStyle = "#70c5ce";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    
+    pipes.draw();
+    fg.draw();
+    bird.draw();
+    score.draw();
+}
+
+function loop() {
+    bird.update();
+    pipes.update();
+    draw();
+    frames++;
+    requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
